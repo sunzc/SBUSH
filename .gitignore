@@ -1,7 +1,7 @@
-.o
-.so
-.out
-.lib
-.obj
-.swp
-.~
+*.o
+*.so
+*.out
+*.lib
+*.obj
+*.swp
+*.~
