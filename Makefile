@@ -1,4 +1,4 @@
 all:sbush
 
 sbush:sbush.c
-	gcc sbush.c
+	gcc  -g sbush.c
