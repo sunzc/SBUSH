@@ -3,10 +3,13 @@
 #include<stdarg.h>
 #include<unistd.h>
 #include<string.h>
+#include<dirent.h>
+#include<sys/types.h>
+#include<sys/stat.h>
 
 #define MAX_CMD_SIZE 256 // max sbush cmd size
 #define MAX_ARG_NUM 8    // max argument number in a sbush cmd
-#define MAX_SH_VAR_NUM 2 // max shell variable number
+#define MAX_SH_VAR_NUM 8 // max shell variable number
 #define MAX_ENV_VAR_NUM 256 // max environment variable number
 #define MAX_VAR_SIZE 256 // max shell variable size
 #define MAX_DIR_SIZE 256 // max directory/path size
@@ -18,9 +21,11 @@ char** parse_cmds(char* cmd, int* arg_size); // parse user cmds into a list of s
 char* get_var(char** var_list, char* var_name); // get variable value by its name in var_list
 void set_var(char** var_list, char* var_name, char* var_value); // set variable value in var_list
 void set_path(char** var_list, char* path_value); // set path value, e.g. PATH=$PATH:/usr/bin
+void set_PS1(char** var_list, char* PS1_value); // set PS1 value, e.g. PS1=\u@\h:\w\$
 char* parse_PS1(char* ps1); // parse PS1 symbols into readable string
 int min(int a, int b);
 int max(int a, int b);
+int is_regular_file(const char *path); // borrowed online
 void execute(char** arg_list, int arg_size, char** sh_var, char** prompt);
 
 #if defined(DEBUG) // code borrowed from kernel code piece with little modification
@@ -119,6 +124,13 @@ char* get_var(char** var_list, char* var_name){//cut var_value if length > MAX_V
 	return NULL;
 }
 
+void set_PS1(char** var_list, char* new_PS1){
+	if (NULL == parse_PS1(new_PS1)){
+		printf("error in set_PS1: unsupported PS1 format!\n");
+		return;
+	}else
+		set_var(var_list, "PS1=", new_PS1);
+}
 void set_path(char** var_list, char* new_path){
 	char *old_path;
 	char *new_path_entry;
@@ -269,6 +281,7 @@ char** parse_cmds(char* cmd, int* arg_size){
 	char** arg_list;//TODO:assume initialized to NULLs
 	char *p, *tp, *tmp;
 	int i, j;
+	int quote_flag;
 	
 	arg_list = (char**) malloc(MAX_ARG_NUM * sizeof(char*));	
 
@@ -280,8 +293,26 @@ char** parse_cmds(char* cmd, int* arg_size){
 
 		i = 0;
 		tmp = (char*) malloc(MAX_CMD_SIZE * sizeof(char));//TODO:suppose malloc always success
-		while(*p != '\n' && *p != ' ' && i < MAX_CMD_SIZE - 1)
-			tmp[i++] = *p++;
+		quote_flag=0;
+		while(*p != '\n' && i < MAX_CMD_SIZE - 1){
+			if(*p == '"' && quote_flag == 0)
+				quote_flag = 1;
+			else if(*p == '"' && quote_flag == 1){
+				if(*(p+1) != ' ' && *(p+1) != '\n'){//ugly input like ABC="ab c"d
+					printf("error in parse_cmds: ugly input!\n");
+					free(tmp);//TODO maybe we should free the whole arg_list
+					return NULL;
+				} else {
+					tmp[i++] = *p++;
+					break;
+				}
+			}
+
+			if(*p == ' ' && quote_flag == 0)
+				break;
+			else
+				tmp[i++] = *p++;
+		}
 		
 		//take one arg
 		if(i > 0 && i < MAX_CMD_SIZE){
@@ -307,16 +338,29 @@ char** parse_cmds(char* cmd, int* arg_size){
 }
 
 void execute(char** arg_list, int arg_size, char** sh_var_list, char** prompt){
-	char *buf, *ptr;
+	struct dirent *entry;
+	DIR *dir;
+	char *buf, *buf1, *ptr;
 	int err, len, len1;
 
 	buf = (char*) malloc(MAX_BUFFER_SIZE * sizeof(char));
 	buf[MAX_BUFFER_SIZE - 1] = '\0';
+	buf1 = (char*) malloc(MAX_BUFFER_SIZE * sizeof(char));
+	buf1[MAX_BUFFER_SIZE - 1] = '\0';
 
-	if(0 == strcmp(arg_list[0],"cd")){
-		if(arg_size == 1)
-			err = chdir(getenv("HOME"));
-		else if(arg_size == 2){
+	if(0 == strcmp(arg_list[0],"cd") || 0 == strcmp(arg_list[0], "ls")){
+		if(arg_size == 1){
+			if(0 == strcmp(arg_list[0], "cd"))
+				err = chdir(getenv("HOME"));
+			else{
+					dir = opendir(getcwd(NULL, MAX_BUFFER_SIZE - 1));
+
+					while((entry = readdir(dir)) != NULL){
+						printf("%s\t", entry->d_name);
+					}
+					printf("\n");
+			}
+		} else if(arg_size == 2){
 			if(arg_list[1][0] != '/' && arg_list[1][0] != '~'){
 				ptr = getcwd(NULL,MAX_BUFFER_SIZE - 1);
 				if(ptr != NULL){
@@ -351,19 +395,70 @@ void execute(char** arg_list, int arg_size, char** sh_var_list, char** prompt){
 			}
 
 			debug_printf("execute:buf = %s\n", buf);
-			err = chdir(buf);
+			if(0 == strcmp(arg_list[0],"cd")){ // cd
+				err = chdir(buf);
 
-			if (err != 0){
-				printf("error in execute: wrong path given in cd!\n");
-				return;
+				if (err != 0){
+					printf("error in execute: wrong path given in cd!\n");//TODO:need to differentiate the err code
+					free(buf);
+					free(buf1);
+					return;
+				}
+			}else{// ls
+				if(is_regular_file(buf)){
+					printf("%s\n",buf);
+				}else{
+					dir = opendir(buf);
+
+					while((entry = readdir(dir)) != NULL){
+						printf("%s	", entry->d_name);
+					}
+					printf("\n");
+				}
 			}
 
 		}
-		*prompt = parse_PS1(get_var(sh_var_list, "PS1="));
+
+	} else if(arg_size == 1 && (ptr=strchr(arg_list[0], '='))) {// handles set sh variables
+
+		len = strlen(ptr);// string length from '=' to the end, e.g. VAR="var_value"
+		len1 = strlen(arg_list[0]);
+
+		if(len1 > len){// get the var_name, cmd not begin with '='
+			strncpy(buf, arg_list[0], len1 - len + 1);
+			buf[len1 - len + 1] = '\0';
+		}else{
+			printf("error in execute: unknown commands!\n");
+			free(buf);
+			free(buf1);
+			return;
+		}
+
+		// check value, "abc" equals abc, note *ptr='='
+		if(ptr[1] == '"' && len >= 3 && ptr[len - 1] == '"'){
+			strncpy(buf1, ptr + 2, len - 3);
+			buf1[len - 3] = '\0';
+		}else if(ptr[1] != '"' && ptr[len - 1] != '"'){
+			strncpy(buf1, ptr + 1, len - 1);
+			buf1[len - 1] = '\0';
+		}else{
+			printf("error in execute: unaccepted var values!\n");
+			free(buf);
+			free(buf1);
+			return;
+		}
+
+		if(0 == strncmp(buf,"PATH=", 5))
+			set_path(sh_var_list, buf1);
+		else if(0 == strncmp(buf, "PS1=", 4))
+			set_PS1(sh_var_list, buf1);
+		else
+			set_var(sh_var_list, buf, buf1);
 	}
 
-	while(*arg_list)
-		printf("%s\n",*arg_list++);
+	*prompt = parse_PS1(get_var(sh_var_list, "PS1="));
+	while(*sh_var_list)
+		printf("%s\n",*sh_var_list++);
 }
 
 int min(int a, int b){
@@ -372,4 +467,10 @@ int min(int a, int b){
 
 int max(int a, int b){
 	return a<b ? b:a;
+}
+
+int is_regular_file(const char *path){
+	struct stat path_stat;
+	stat(path, &path_stat);
+	return S_ISREG(path_stat.st_mode);
 }
