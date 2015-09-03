@@ -124,7 +124,7 @@ int main(int argc, char* argv[], char* envp[]){
 	}
 
 	if(argc > 2){
-		printf("OK, I'm still a baby! Don't play too much with me, or I will cry\(ush\)!\n");
+		printf("OK, I'm still a baby! Don't play too much with me, or I will cry(ush)!\n");
 		return 0;
 	}
 
