@@ -48,17 +48,28 @@ static void debug_printf(char *fmt, ...)
 #endif
 
 int main(int argc, char* argv[], char* envp[]){
-//	int i;
 	char *cmd, *tmp, *prompt;
 	char** arg_list;
 	char** SH_VAR_LIST;
 	int arg_size;
 	
+	FILE* fd;
+	char *line;
+	int len;
+
 	tmp = (char*) malloc(MAX_DIR_SIZE * sizeof(char));
 	tmp = getcwd(NULL, MAX_DIR_SIZE);
-	debug_printf("szc:main:cwd:tmp is %s\n",tmp);
 
 	SH_VAR_LIST = (char**) malloc(MAX_SH_VAR_NUM * sizeof(char*));
+
+	tmp = get_var(envp,"PATH=");
+	set_var(SH_VAR_LIST, "PATH=", tmp);
+
+	set_var(SH_VAR_LIST, "PS1=", "\\u@\\h:\\w\\$ ");
+	tmp = get_var(SH_VAR_LIST,"PS1=");
+
+	prompt = parse_PS1(tmp);
+/*
 	tmp = get_var(envp,"PATH=");
 	debug_printf("szc:main:envp:path is %s\n",tmp);
 	set_var(SH_VAR_LIST, "PATH=", tmp);
@@ -77,14 +88,46 @@ int main(int argc, char* argv[], char* envp[]){
 	prompt = parse_PS1(tmp);
 	debug_printf("szc:main:sh:ps1 value after parse ps1 is %s\n",tmp);
 
-
-/*	
+	int i;
 	i = 0;
-	while(envp[i]){
+	printf("argv is %d\n", argc);
+	while(argv[i]){
 		printf("%s\n", envp[i]);
 		i += 1;
-	}	
+	}
 */
+
+	// read cmds from sbush scripts!
+	if(argc == 2){
+		len = strlen(argv[1]);
+		if(len > 3 && 0 == strncmp(argv[1]+len-3,".sh", 3) && is_file_executable(argv[1])){
+			fd = fopen(argv[1], "r");
+
+			if(fd == NULL){
+				printf("error in main: file does not exists %s\n", argv[1]);
+				return 0;
+			}
+
+			line = (char*) malloc(MAX_BUFFER_SIZE * sizeof(char));
+			while(fgets(line, MAX_BUFFER_SIZE - 1, fd) != NULL) {
+				//printf("%s", line);
+				arg_list = parse_cmds(line, &arg_size);
+				if(!arg_list)
+					continue;
+				execute(arg_list, arg_size, SH_VAR_LIST, &prompt);
+			}
+			free(line);
+			fclose(fd);
+		}
+
+		return 0;
+	}
+
+	if(argc > 2){
+		printf("OK, I'm still a baby! Don't play too much with me, or I will cry(crush)!\n");
+		return 0;
+	}
+
 	cmd =(char*) malloc(MAX_CMD_SIZE * sizeof(char));
 	while(1){
 		printf("%s",prompt);
@@ -290,14 +333,14 @@ char** parse_cmds(char* cmd, int* arg_size){
 
 	j = 0;// arg number, < MAX_ARG_NUM
 	p = cmd;
-	while(*p && *p != '\n' && j<MAX_ARG_NUM){
+	while(*p && *p != '#' && *p != '\n' && j<MAX_ARG_NUM){
 		while(*p == ' ')
 			p++;// skip spaces
 
 		i = 0;
 		tmp = (char*) malloc(MAX_CMD_SIZE * sizeof(char));//TODO:suppose malloc always success
 		quote_flag=0;
-		while(*p != '\n' && i < MAX_CMD_SIZE - 1){
+		while(*p != '\n' && *p != '#' && i < MAX_CMD_SIZE - 1){
 			if(*p == '"' && quote_flag == 0)
 				quote_flag = 1;
 			else if(*p == '"' && quote_flag == 1){
@@ -324,7 +367,7 @@ char** parse_cmds(char* cmd, int* arg_size){
 		}else if(i >= MAX_CMD_SIZE){
 			printf("error: argument too long!\n");
 			return NULL;
-		}else if(*p == '\n')
+		}else if(*p == '\n' || *p == '#')
 			break;		
 		
 		debug_printf("szc:parse_cmds:tmp is %s , j = %d\n", tmp, j);
