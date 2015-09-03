@@ -15,7 +15,7 @@
 #define MAX_DIR_SIZE 256 // max directory/path size
 #define MAX_BUFFER_SIZE 256 // hostname size
 
-#define DEBUG
+//#define DEBUG
 
 char** parse_cmds(char* cmd, int* arg_size); // parse user cmds into a list of strings
 char* get_var(char** var_list, char* var_name); // get variable value by its name in var_list
@@ -26,6 +26,9 @@ char* parse_PS1(char* ps1); // parse PS1 symbols into readable string
 int min(int a, int b);
 int max(int a, int b);
 int is_regular_file(const char *path); // borrowed online
+int does_file_exist(const char *filename);
+int is_file_executable(const char *filename);
+char* locate_executable_file(char** var_list, char* filename);
 void execute(char** arg_list, int arg_size, char** sh_var, char** prompt);
 
 #if defined(DEBUG) // code borrowed from kernel code piece with little modification
@@ -342,11 +345,16 @@ void execute(char** arg_list, int arg_size, char** sh_var_list, char** prompt){
 	DIR *dir;
 	char *buf, *buf1, *ptr;
 	int err, len, len1;
+	int *status_ptr;
+	pid_t pid;
 
 	buf = (char*) malloc(MAX_BUFFER_SIZE * sizeof(char));
 	buf[MAX_BUFFER_SIZE - 1] = '\0';
 	buf1 = (char*) malloc(MAX_BUFFER_SIZE * sizeof(char));
 	buf1[MAX_BUFFER_SIZE - 1] = '\0';
+
+	if(arg_list[0] == NULL)
+		return;
 
 	if(0 == strcmp(arg_list[0],"cd") || 0 == strcmp(arg_list[0], "ls")){
 		if(arg_size == 1){
@@ -419,7 +427,14 @@ void execute(char** arg_list, int arg_size, char** sh_var_list, char** prompt){
 
 		}
 
-	} else if(arg_size == 1 && (ptr=strchr(arg_list[0], '='))) {// handles set sh variables
+	} else if(ptr=strchr(arg_list[0], '=')) {// handles set sh variables
+
+		if(arg_size > 1){
+			printf("error in execute: unaccepted format!\n");
+			free(buf);
+			free(buf1);
+			return;
+		}
 
 		len = strlen(ptr);// string length from '=' to the end, e.g. VAR="var_value"
 		len1 = strlen(arg_list[0]);
@@ -454,11 +469,54 @@ void execute(char** arg_list, int arg_size, char** sh_var_list, char** prompt){
 			set_PS1(sh_var_list, buf1);
 		else
 			set_var(sh_var_list, buf, buf1);
+	} else {
+		ptr = locate_executable_file(sh_var_list, arg_list[0]);
+		if(ptr){
+			// TODO: execute this file with args from arg_list 1..
+			debug_printf("executable file is %s\n",ptr);
+			pid = fork();
+			if(pid == 0){
+				// child process
+				if(0 == strcmp(arg_list[arg_size - 1], "&"))
+					arg_size = arg_size - 1;
+
+				switch(arg_size){
+					case 1: execlp(ptr, ptr, (char*)NULL); break;
+					case 2: execlp(ptr, ptr, arg_list[1], (char*)NULL); break;
+					case 3: execlp(ptr, ptr, arg_list[1], arg_list[2], (char*)NULL); break;
+					case 4: execlp(ptr, ptr, arg_list[1], arg_list[2], arg_list[3], (char*)NULL); break;
+					case 5: execlp(ptr, ptr, arg_list[1], arg_list[2], arg_list[3], arg_list[4], (char*)NULL); break;
+					case 6: execlp(ptr, ptr, arg_list[1], arg_list[2], arg_list[3], arg_list[4], arg_list[5], (char*)NULL); break;
+					default:
+						printf("error in execute: too many arguments\n");
+						free(buf);
+						free(buf1);
+						return;
+				}
+			} else if (pid > 0){
+				if(0 != strcmp(arg_list[arg_size - 1], "&"))
+					waitpid(pid, status_ptr, 0);
+				free(buf);
+				free(buf1);
+				return;
+			} else {
+				printf("error in execute: fork process error!\n");
+				free(buf);
+				free(buf1);
+				return;
+			}
+
+		} else {
+			free(buf);
+			free(buf1);
+			return;
+		}
 	}
 
 	*prompt = parse_PS1(get_var(sh_var_list, "PS1="));
-	while(*sh_var_list)
+/*	while(*sh_var_list)
 		printf("%s\n",*sh_var_list++);
+*/
 }
 
 int min(int a, int b){
@@ -473,4 +531,94 @@ int is_regular_file(const char *path){
 	struct stat path_stat;
 	stat(path, &path_stat);
 	return S_ISREG(path_stat.st_mode);
+}
+
+int does_file_exist(const char *filename) {
+    struct stat st;
+    int result = stat(filename, &st);
+    return result == 0;
+}
+
+int is_file_executable(const char *filename){
+	struct stat path_stat;
+	return stat(filename, &path_stat) == 0 && path_stat.st_mode & S_IXUSR;
+}
+
+char* locate_executable_file(char **var_list, char *filename){
+	char *path, *pre, *p;
+	char *buf;
+	int last_len, cur_len;
+	path = get_var(var_list,"PATH=");
+
+	// check if file exists in current working directory
+	if(does_file_exist(filename)){
+		if(is_file_executable){
+			debug_printf("we found an executable here: %s\n",filename);
+			return filename;
+		}
+		else{
+			printf("error in locate_executable_file: file is not executable!\n");
+			return NULL;
+		}
+	}
+
+	buf = (char*) malloc(MAX_BUFFER_SIZE * sizeof(char));
+
+	pre = path;
+	last_len = strlen(pre);
+	while(last_len > 0 && pre != NULL && (p = strstr(pre, ":")) != NULL){
+		cur_len = strlen(p);
+		strncpy(buf, pre, last_len - cur_len);
+		buf[last_len - cur_len] = '/';
+
+		if((strlen(filename) + last_len - cur_len + 1) < MAX_BUFFER_SIZE - 1){
+			strncpy(buf+last_len - cur_len + 1, filename, strlen(filename));
+		} else {
+			printf("error in locate_executable_file: filename too long!\n");
+			free(buf);
+			return NULL;
+		}
+
+		buf[last_len - cur_len + 1 + strlen(filename)] = '\0';
+		if(does_file_exist(buf)){
+			if(is_file_executable(buf))
+				return buf;
+			else{
+				printf("error in locate_executable_file: filename is not executable!\n");
+				free(buf);
+				return NULL;
+			}
+		}
+		last_len = cur_len - 1;
+		pre = p + 1;
+	}
+
+	if(last_len > 0 && pre != NULL && (p = strstr(pre, ":")) == NULL){
+		cur_len = strlen(pre);
+		strncpy(buf, pre, cur_len);
+		buf[cur_len] = '/';
+
+		if((strlen(filename) + cur_len + 1) < MAX_BUFFER_SIZE - 1){
+			strncpy(buf + cur_len + 1, filename, strlen(filename));
+		} else {
+			printf("error in locate_executable_file: filename too long!\n");
+			free(buf);
+			return NULL;
+		}
+
+		buf[cur_len + 1 + strlen(filename)] = '\0';
+		if(does_file_exist(buf)){
+			if(is_file_executable(buf))
+				return buf;
+			else{
+				printf("error in locate_executable_file: filename is not executable!\n");
+				free(buf);
+				return NULL;
+			}
+		}
+	}
+
+	printf("error in locate_executable_file: filename does not exist!\n");
+	free(buf);
+	return NULL;
 }
