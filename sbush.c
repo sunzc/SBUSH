@@ -29,7 +29,7 @@ int is_regular_file(const char *path); // borrowed online
 int does_file_exist(const char *filename);
 int is_file_executable(const char *filename);
 char* locate_executable_file(char** var_list, char* filename);
-void execute(char** arg_list, int arg_size, char** sh_var, char** prompt);
+void execute(char** arg_list, int arg_size, char** sh_var, char** prompt, char *const envp[]);
 
 #if defined(DEBUG) // code borrowed from kernel code piece with little modification
 static void debug_printf(char *fmt, ...)
@@ -69,33 +69,6 @@ int main(int argc, char* argv[], char* envp[]){
 	tmp = get_var(SH_VAR_LIST,"PS1=");
 
 	prompt = parse_PS1(tmp);
-/*
-	tmp = get_var(envp,"PATH=");
-	debug_printf("szc:main:envp:path is %s\n",tmp);
-	set_var(SH_VAR_LIST, "PATH=", tmp);
-	tmp = get_var(SH_VAR_LIST,"PATH=");
-	debug_printf("szc:main:sh:path is %s\n",tmp);
-	set_path(SH_VAR_LIST,tmp);
-	debug_printf("szc:main:after set_path\n");
-	tmp = get_var(SH_VAR_LIST,"PATH=");
-	debug_printf("szc:main:sh:path after set_path1 is %s\n",tmp);
-	set_path(SH_VAR_LIST,"/usr/szc1:$PATH:/usr/szc2");
-	tmp = get_var(SH_VAR_LIST,"PATH=");
-	debug_printf("szc:main:sh:path after set_path2 is %s\n",tmp);
-	set_var(SH_VAR_LIST, "PS1=", "\\u@\\h:\\w\\$ ");
-	tmp = get_var(SH_VAR_LIST,"PS1=");
-	debug_printf("szc:main:sh:ps1 after set ps1 is %s\n",tmp);
-	prompt = parse_PS1(tmp);
-	debug_printf("szc:main:sh:ps1 value after parse ps1 is %s\n",tmp);
-
-	int i;
-	i = 0;
-	printf("argv is %d\n", argc);
-	while(argv[i]){
-		printf("%s\n", envp[i]);
-		i += 1;
-	}
-*/
 
 	// read cmds from sbush scripts!
 	if(argc == 2){
@@ -114,7 +87,7 @@ int main(int argc, char* argv[], char* envp[]){
 				arg_list = parse_cmds(line, &arg_size);
 				if(!arg_list)
 					continue;
-				execute(arg_list, arg_size, SH_VAR_LIST, &prompt);
+				execute(arg_list, arg_size, SH_VAR_LIST, &prompt, envp);
 			}
 			free(line);
 			fclose(fd);
@@ -137,7 +110,7 @@ int main(int argc, char* argv[], char* envp[]){
 		arg_list = parse_cmds(cmd, &arg_size);
 		if(!arg_list)
 			continue;
-		execute(arg_list, arg_size, SH_VAR_LIST, &prompt);
+		execute(arg_list, arg_size, SH_VAR_LIST, &prompt, envp);
 	}
 	return 0;
 }
@@ -383,7 +356,7 @@ char** parse_cmds(char* cmd, int* arg_size){
 	return arg_list;
 }
 
-void execute(char** arg_list, int arg_size, char** sh_var_list, char** prompt){
+void execute(char** arg_list, int arg_size, char** sh_var_list, char** prompt, char *const envp[]){
 	struct dirent *entry;
 	DIR *dir;
 	char *buf, *buf1, *ptr;
@@ -520,22 +493,9 @@ void execute(char** arg_list, int arg_size, char** sh_var_list, char** prompt){
 			pid = fork();
 			if(pid == 0){
 				// child process
-				if(0 == strcmp(arg_list[arg_size - 1], "&"))
-					arg_size = arg_size - 1;
 
-				switch(arg_size){
-					case 1: execlp(ptr, ptr, (char*)NULL); break;
-					case 2: execlp(ptr, ptr, arg_list[1], (char*)NULL); break;
-					case 3: execlp(ptr, ptr, arg_list[1], arg_list[2], (char*)NULL); break;
-					case 4: execlp(ptr, ptr, arg_list[1], arg_list[2], arg_list[3], (char*)NULL); break;
-					case 5: execlp(ptr, ptr, arg_list[1], arg_list[2], arg_list[3], arg_list[4], (char*)NULL); break;
-					case 6: execlp(ptr, ptr, arg_list[1], arg_list[2], arg_list[3], arg_list[4], arg_list[5], (char*)NULL); break;
-					default:
-						printf("error in execute: too many arguments\n");
-						free(buf);
-						free(buf1);
-						return;
-				}
+				execve(ptr, arg_list, envp);
+
 			} else if (pid > 0){
 				if(0 != strcmp(arg_list[arg_size - 1], "&"))
 					waitpid(pid, status_ptr, 0);
